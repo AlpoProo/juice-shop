@@ -58,6 +58,9 @@ jobs:
         with:
           node-version: 20
 
+      - name: Global Angular CLI Kur
+        run: npm install -g @angular/cli
+
       - name: Ana Dizin Paketleri Yükle
         run: |
           # Skript içinde postinstall komutlarını çalıştırmadan paketleri yükle
@@ -73,6 +76,17 @@ jobs:
         run: |
           # Frontend paketlerini ayrıca yükle
           npm install --ignore-scripts --legacy-peer-deps
+
+      - name: Frontend Angular CLI Versiyonunu Kontrol Et
+        working-directory: ./frontend
+        run: |
+          echo "npm paketi içindeki ng versiyonu:"
+          if [ -f "./node_modules/.bin/ng" ]; then
+            ./node_modules/.bin/ng version
+          else
+            echo "ng komutu bulunamadı, global Angular CLI kullanılacak"
+            ng version
+          fi
 
       - name: Paketleri Önbelleğe Al
         uses: actions/cache@v3
@@ -97,6 +111,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Global Angular CLI Kur
+        run: npm install -g @angular/cli
 
       - name: Önbelleği Geri Yükle
         uses: actions/cache@v3
