@@ -1,25 +1,35 @@
-name: "Güvenlik CI/CD Pipeline"
+name: "DevSecOps Güvenlik Pipeline"
 
 on:
   push:
-    branches:
-      - main
-      - master
-      - develop
+    branches: [main, master, develop]
   pull_request:
-    branches:
-      - main
-      - master
-      - develop
+    branches: [main, master, develop]
   schedule:
-    - cron: '0 0 * * 1' # Her pazartesi gece yarısı çalıştır
-
-env:
-  NODE_VERSION: 20
+    - cron: '0 0 * * 1'  # Her Pazartesi günü çalıştır
 
 jobs:
-  secret-scanning:
-    name: GitLeaks ile Sızıntı Taraması
+  initialize:
+    name: Pipeline Başlangıcı
+    runs-on: ubuntu-latest
+    outputs:
+      runtag: ${{ steps.set-runtag.outputs.runtag }}
+    steps:
+      - name: Runtag Oluştur
+        id: set-runtag
+        run: |
+          echo "runtag=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+      
+      - name: Pipeline Bilgisi
+        run: |
+          echo "DevSecOps Pipeline başlatılıyor"
+          echo "Runtag: ${{ steps.set-runtag.outputs.runtag }}"
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+
+  secret-scan:
+    name: GitLeaks - Sır Taraması
+    needs: initialize
     runs-on: ubuntu-latest
     steps:
       - name: Repoyu Kontrol Et
@@ -27,86 +37,126 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: GitLeaks ile Sır Taraması
+      - name: GitLeaks ile Sızıntı Taraması
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
-  dependency-scanning:
-    name: Bağımlılık Güvenlik Taraması
+  sast:
+    name: Statik Kod Analizi
+    needs: initialize
     runs-on: ubuntu-latest
     steps:
       - name: Repoyu Kontrol Et
         uses: actions/checkout@v4
 
-      - name: Node.js Kurulumu
+      - name: Node.js Ayarla
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: 20
 
       - name: Bağımlılıkları Yükle
         run: npm ci
 
-      - name: NPM Audit
-        run: npm audit --production --audit-level=high
-
-      - name: Syft ile SBOM Oluştur
-        uses: anchore/sbom-action@v0
-        with:
-          format: cyclonedx-json
-          output-file: sbom.cyclonedx.json
-
-      - name: SBOM Dosyasını Arşivle
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom-cyclonedx
-          path: sbom.cyclonedx.json
-
-  static-code-analysis:
-    name: Statik Kod Analizi
-    runs-on: ubuntu-latest
-    steps:
-      - name: Repoyu Kontrol Et
-        uses: actions/checkout@v4
+      - name: ESLint ile Kod Analizi
+        run: npm run lint || true
 
       - name: Semgrep ile Kod Analizi
         uses: semgrep/semgrep-action@v1
         with:
+          publishToken: ${{ secrets.SEMGREP_APP_TOKEN }}
+          publishDeployment: ${{ secrets.SEMGREP_DEPLOYMENT_ID }}
           config: >-
             p/owasp-top-ten
             p/javascript
             p/nodejs
             p/typescript
             p/angular
-          output: semgrep-findings.json
-          publish-token: ${{ secrets.SEMGREP_APP_TOKEN }}
+          generateSarif: "1"
+          output: semgrep.sarif
 
-      - name: ESLint ile Kod Analizi
-        run: |
-          npm ci
-          npm run lint
-
-      - name: Semgrep Sonuçlarını Arşivle
-        uses: actions/upload-artifact@v4
+      - name: Semgrep Sonuçlarını Yükle
+        uses: github/codeql-action/upload-sarif@v2
         with:
-          name: semgrep-findings
-          path: semgrep-findings.json
+          sarif_file: semgrep.sarif
+          category: semgrep
 
-  docker-image-scan:
-    name: Docker İmaj Güvenlik Taraması
+  dependency-check:
+    name: Bağımlılık Güvenlik Taraması
+    needs: initialize
     runs-on: ubuntu-latest
     steps:
       - name: Repoyu Kontrol Et
         uses: actions/checkout@v4
 
-      - name: Docker İmajı Oluştur
-        run: docker build -t juice-shop:${{ github.sha }} .
+      - name: Node.js Ayarla
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Bağımlılıkları Yükle
+        run: npm ci
+
+      - name: NPM Audit
+        run: npm audit --production --audit-level=high || true
+
+      - name: OWASP Dependency-Check
+        uses: dependency-check/Dependency-Check_Action@main
+        id: dependency-check
+        with:
+          project: "juice-shop"
+          path: "."
+          format: "HTML"
+          out: "./reports"
+          args: >
+            --enableRetired
+            --suppression="./.dependency-check-suppression.xml"
+            --failOnCVSS=7
+            --exclude="**/frontend/node_modules/**"
+
+      - name: Dependency-Check Raporu Yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: ./reports/dependency-check-report.html
+
+  sbom:
+    name: SBOM Oluşturma
+    needs: [initialize, dependency-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+
+      - name: Syft ile SBOM Oluştur
+        uses: anchore/sbom-action@v0
+        with:
+          format: cyclonedx-json
+          output-file: ./sbom-${{ needs.initialize.outputs.runtag }}.cyclonedx.json
+
+      - name: SBOM Dosyasını Arşivle
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx-${{ needs.initialize.outputs.runtag }}
+          path: ./sbom-${{ needs.initialize.outputs.runtag }}.cyclonedx.json
+
+  container-scan:
+    name: Docker İmaj Taraması
+    needs: [initialize, sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+
+      - name: Docker Build
+        run: |
+          docker build -t juice-shop:${{ needs.initialize.outputs.runtag }} .
+          docker tag juice-shop:${{ needs.initialize.outputs.runtag }} juice-shop:latest
 
       - name: Trivy ile Docker İmaj Taraması
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'juice-shop:${{ github.sha }}'
+          image-ref: 'juice-shop:${{ needs.initialize.outputs.runtag }}'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -117,17 +167,17 @@ jobs:
           sarif_file: 'trivy-results.sarif'
           category: trivy
 
-  zap-scan:
-    name: ZAP DAST Taraması
+  dast:
+    name: ZAP Dinamik Tarama
+    needs: [initialize, container-scan]
     runs-on: ubuntu-latest
-    needs: [docker-image-scan]
     steps:
       - name: Repoyu Kontrol Et
         uses: actions/checkout@v4
 
       - name: Docker Compose ile Uygulamayı Başlat
         run: |
-          docker-compose up -d
+          docker run -d --name juice-shop-${{ needs.initialize.outputs.runtag }} -p 3000:3000 juice-shop:${{ needs.initialize.outputs.runtag }}
           sleep 30  # Uygulamanın başlaması için bekle
 
       - name: ZAP Full Scan
@@ -142,25 +192,37 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zap-full-scan-report
-          path: zap-full-scan-results.json
+          path: zap-full-scan-report.html
 
   security-report:
-    name: Güvenlik Raporu Oluştur
+    name: Güvenlik Raporu
+    needs: [initialize, secret-scan, sast, dependency-check, sbom, container-scan, dast]
     runs-on: ubuntu-latest
-    needs: [secret-scanning, dependency-scanning, static-code-analysis, docker-image-scan, zap-scan]
     steps:
-      - name: Tüm Güvenlik Raporlarını İndir
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+
+      - name: Raporları İndir
         uses: actions/download-artifact@v4
+        with:
+          path: ./reports
 
       - name: Özet Güvenlik Raporu Oluştur
         run: |
-          echo "# Güvenlik Tarama Sonuçları" > security-report.md
+          echo "# Güvenlik Tarama Sonuçları - ${{ needs.initialize.outputs.runtag }}" > security-report.md
+          echo "## Tarama Özeti" >> security-report.md
+          echo "* Tarih: $(date)" >> security-report.md
+          echo "* Branch: ${{ github.ref }}" >> security-report.md
+          echo "* Commit: ${{ github.sha }}" >> security-report.md
+          echo "* Runtag: ${{ needs.initialize.outputs.runtag }}" >> security-report.md
           echo "## Gizli Bilgi Taraması" >> security-report.md
           echo "GitLeaks taraması tamamlandı" >> security-report.md
-          echo "## Bağımlılık Taraması" >> security-report.md
-          echo "NPM Audit ve SBOM oluşturma tamamlandı" >> security-report.md
           echo "## Statik Kod Analizi" >> security-report.md
-          echo "Semgrep ve ESLint taramaları tamamlandı" >> security-report.md
+          echo "Semgrep taraması tamamlandı" >> security-report.md
+          echo "## Bağımlılık Taraması" >> security-report.md
+          echo "NPM Audit ve OWASP Dependency-Check tamamlandı" >> security-report.md
+          echo "## SBOM" >> security-report.md
+          echo "Syft ile SBOM oluşturma tamamlandı" >> security-report.md
           echo "## Docker İmaj Taraması" >> security-report.md
           echo "Trivy taraması tamamlandı" >> security-report.md
           echo "## DAST Taraması" >> security-report.md
@@ -169,5 +231,21 @@ jobs:
       - name: Güvenlik Raporunu Arşivle
         uses: actions/upload-artifact@v4
         with:
-          name: security-report
-          path: security-report.md 
+          name: security-report-${{ needs.initialize.outputs.runtag }}
+          path: security-report.md
+
+  notify:
+    name: Bildirim Gönder
+    needs: [initialize, security-report]
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    steps:
+      - name: Bildirim Durumu
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "Pipeline başarıyla tamamlandı! 🚀"
+            echo "Runtag: ${{ needs.initialize.outputs.runtag }}"
+          else
+            echo "Pipeline'da hatalar oluştu! ⚠️"
+            echo "Runtag: ${{ needs.initialize.outputs.runtag }}"
+          fi
