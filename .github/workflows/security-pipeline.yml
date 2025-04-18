@@ -15,6 +15,9 @@ jobs:
     outputs:
       runtag: ${{ steps.set-runtag.outputs.runtag }}
     steps:
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+
       - name: Runtag Oluştur
         id: set-runtag
         run: |
@@ -42,8 +45,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  sast:
-    name: Statik Kod Analizi
+  setup-dependencies:
+    name: Bağımlılıkları Hazırla
     needs: initialize
     runs-on: ubuntu-latest
     steps:
@@ -54,9 +57,59 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
+
+      - name: package-lock.json Kontrolü
+        id: check-lock
+        run: |
+          if [ -f "package-lock.json" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Package-lock.json oluştur (gerekirse)
+        if: steps.check-lock.outputs.exists == 'false'
+        run: |
+          npm install --package-lock-only --legacy-peer-deps
+          echo "Package-lock.json oluşturuldu."
 
       - name: Bağımlılıkları Yükle
-        run: npm ci
+        run: npm install --legacy-peer-deps
+
+      - name: Bağımlılıkları Önbelleğe Al
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+  sast:
+    name: Statik Kod Analizi
+    needs: [initialize, setup-dependencies]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+
+      - name: Node.js Ayarla
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Önbelleği Geri Yükle
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
 
       - name: ESLint ile Kod Analizi
         run: npm run lint || true
@@ -83,7 +136,7 @@ jobs:
 
   dependency-check:
     name: Bağımlılık Güvenlik Taraması
-    needs: initialize
+    needs: [initialize, setup-dependencies]
     runs-on: ubuntu-latest
     steps:
       - name: Repoyu Kontrol Et
@@ -93,9 +146,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
-      - name: Bağımlılıkları Yükle
-        run: npm ci
+      - name: Önbelleği Geri Yükle
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
 
       - name: NPM Audit
         run: npm audit --production --audit-level=high || true
@@ -122,11 +183,27 @@ jobs:
 
   sbom:
     name: SBOM Oluşturma
-    needs: [initialize, dependency-check]
+    needs: [initialize, setup-dependencies]
     runs-on: ubuntu-latest
     steps:
       - name: Repoyu Kontrol Et
         uses: actions/checkout@v4
+
+      - name: Node.js Ayarla
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Önbelleği Geri Yükle
+        uses: actions/cache@v3
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
 
       - name: Syft ile SBOM Oluştur
         uses: anchore/sbom-action@v0
@@ -248,4 +325,4 @@ jobs:
           else
             echo "Pipeline'da hatalar oluştu! ⚠️"
             echo "Runtag: ${{ needs.initialize.outputs.runtag }}"
-          fi
+          fi 
