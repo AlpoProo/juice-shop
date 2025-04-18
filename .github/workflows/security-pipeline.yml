@@ -57,31 +57,24 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # cache özelliğini kapatıyoruz, çünkü kilit dosyası bulunamıyor
-          # Kendi önbellekleme stratejimizi kullanacağız
 
-      - name: Package-lock.json Oluştur
+      - name: Ana Dizin Paketleri Yükle
         run: |
-          npm install --package-lock-only --legacy-peer-deps
-          echo "Package-lock.json oluşturuldu."
+          # Skript içinde postinstall komutlarını çalıştırmadan paketleri yükle
+          npm install --ignore-scripts --legacy-peer-deps
 
-      - name: package-lock.json Kontrol
+      - name: Frontend Paketleri Yükle
+        working-directory: ./frontend
         run: |
-          if [ -f "package-lock.json" ]; then
-            echo "package-lock.json başarıyla oluşturuldu."
-          else
-            echo "package-lock.json oluşturulamadı!"
-            ls -la
-          fi
+          # Frontend paketlerini ayrıca yükle
+          npm install --ignore-scripts --legacy-peer-deps
 
-      - name: Bağımlılıkları Yükle
-        run: npm install --legacy-peer-deps
-
-      - name: Bağımlılıkları Önbelleğe Al
+      - name: Paketleri Önbelleğe Al
         uses: actions/cache@v3
         with:
           path: |
             node_modules
+            frontend/node_modules
             ~/.npm
           key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package.json') }}
           restore-keys: |
@@ -99,19 +92,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # cache özelliğini devre dışı bırakıyoruz
 
       - name: Önbelleği Geri Yükle
         uses: actions/cache@v3
         with:
           path: |
             node_modules
+            frontend/node_modules
             ~/.npm
           key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-modules-
 
-      - name: ESLint ile Kod Analizi
+      - name: ESLint ile Kod Analizi (Ana Dizin)
         run: npm run lint || true
 
       - name: Semgrep ile Kod Analizi
@@ -146,19 +139,23 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # cache özelliğini devre dışı bırakıyoruz
 
       - name: Önbelleği Geri Yükle
         uses: actions/cache@v3
         with:
           path: |
             node_modules
+            frontend/node_modules
             ~/.npm
           key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-modules-
 
-      - name: NPM Audit
+      - name: NPM Audit (Ana Dizin)
+        run: npm audit --production --audit-level=high || true
+
+      - name: NPM Audit (Frontend)
+        working-directory: ./frontend
         run: npm audit --production --audit-level=high || true
 
       - name: OWASP Dependency-Check
@@ -193,19 +190,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # cache özelliğini devre dışı bırakıyoruz
 
       - name: Önbelleği Geri Yükle
         uses: actions/cache@v3
         with:
           path: |
             node_modules
+            frontend/node_modules
             ~/.npm
           key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package.json') }}
           restore-keys: |
             ${{ runner.os }}-node-modules-
 
-      - name: Syft ile SBOM Oluştur
+      - name: Syft ile SBOM Oluştur (Ana Dizin)
         uses: anchore/sbom-action@v0
         with:
           format: cyclonedx-json
