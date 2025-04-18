@@ -57,22 +57,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          # cache özelliğini kapatıyoruz, çünkü kilit dosyası bulunamıyor
+          # Kendi önbellekleme stratejimizi kullanacağız
 
-      - name: package-lock.json Kontrolü
-        id: check-lock
-        run: |
-          if [ -f "package-lock.json" ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Package-lock.json oluştur (gerekirse)
-        if: steps.check-lock.outputs.exists == 'false'
+      - name: Package-lock.json Oluştur
         run: |
           npm install --package-lock-only --legacy-peer-deps
           echo "Package-lock.json oluşturuldu."
+
+      - name: package-lock.json Kontrol
+        run: |
+          if [ -f "package-lock.json" ]; then
+            echo "package-lock.json başarıyla oluşturuldu."
+          else
+            echo "package-lock.json oluşturulamadı!"
+            ls -la
+          fi
 
       - name: Bağımlılıkları Yükle
         run: npm install --legacy-peer-deps
@@ -83,9 +83,9 @@ jobs:
           path: |
             node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-node-modules-
 
   sast:
     name: Statik Kod Analizi
@@ -99,7 +99,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          # cache özelliğini devre dışı bırakıyoruz
 
       - name: Önbelleği Geri Yükle
         uses: actions/cache@v3
@@ -107,9 +107,9 @@ jobs:
           path: |
             node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-node-modules-
 
       - name: ESLint ile Kod Analizi
         run: npm run lint || true
@@ -146,7 +146,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          # cache özelliğini devre dışı bırakıyoruz
 
       - name: Önbelleği Geri Yükle
         uses: actions/cache@v3
@@ -154,9 +154,9 @@ jobs:
           path: |
             node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-node-modules-
 
       - name: NPM Audit
         run: npm audit --production --audit-level=high || true
@@ -193,7 +193,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          # cache özelliğini devre dışı bırakıyoruz
 
       - name: Önbelleği Geri Yükle
         uses: actions/cache@v3
@@ -201,9 +201,9 @@ jobs:
           path: |
             node_modules
             ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-
+            ${{ runner.os }}-node-modules-
 
       - name: Syft ile SBOM Oluştur
         uses: anchore/sbom-action@v0
