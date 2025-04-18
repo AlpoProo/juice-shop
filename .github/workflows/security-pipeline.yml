@@ -1,0 +1,173 @@
+name: "Güvenlik CI/CD Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+  schedule:
+    - cron: '0 0 * * 1' # Her pazartesi gece yarısı çalıştır
+
+env:
+  NODE_VERSION: 20
+
+jobs:
+  secret-scanning:
+    name: GitLeaks ile Sızıntı Taraması
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: GitLeaks ile Sır Taraması
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  dependency-scanning:
+    name: Bağımlılık Güvenlik Taraması
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+
+      - name: Node.js Kurulumu
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Bağımlılıkları Yükle
+        run: npm ci
+
+      - name: NPM Audit
+        run: npm audit --production --audit-level=high
+
+      - name: Syft ile SBOM Oluştur
+        uses: anchore/sbom-action@v0
+        with:
+          format: cyclonedx-json
+          output-file: sbom.cyclonedx.json
+
+      - name: SBOM Dosyasını Arşivle
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cyclonedx.json
+
+  static-code-analysis:
+    name: Statik Kod Analizi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+
+      - name: Semgrep ile Kod Analizi
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/owasp-top-ten
+            p/javascript
+            p/nodejs
+            p/typescript
+            p/angular
+          output: semgrep-findings.json
+          publish-token: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: ESLint ile Kod Analizi
+        run: |
+          npm ci
+          npm run lint
+
+      - name: Semgrep Sonuçlarını Arşivle
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-findings
+          path: semgrep-findings.json
+
+  docker-image-scan:
+    name: Docker İmaj Güvenlik Taraması
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+
+      - name: Docker İmajı Oluştur
+        run: docker build -t juice-shop:${{ github.sha }} .
+
+      - name: Trivy ile Docker İmaj Taraması
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'juice-shop:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Trivy Sonuçlarını Yükle
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: trivy
+
+  zap-scan:
+    name: ZAP DAST Taraması
+    runs-on: ubuntu-latest
+    needs: [docker-image-scan]
+    steps:
+      - name: Repoyu Kontrol Et
+        uses: actions/checkout@v4
+
+      - name: Docker Compose ile Uygulamayı Başlat
+        run: |
+          docker-compose up -d
+          sleep 30  # Uygulamanın başlaması için bekle
+
+      - name: ZAP Full Scan
+        uses: zaproxy/action-full-scan@v0.9.0
+        with:
+          target: 'http://localhost:3000'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a -j'
+          allow_issue_writing: true
+
+      - name: ZAP Raporunu Arşivle
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-full-scan-report
+          path: zap-full-scan-results.json
+
+  security-report:
+    name: Güvenlik Raporu Oluştur
+    runs-on: ubuntu-latest
+    needs: [secret-scanning, dependency-scanning, static-code-analysis, docker-image-scan, zap-scan]
+    steps:
+      - name: Tüm Güvenlik Raporlarını İndir
+        uses: actions/download-artifact@v4
+
+      - name: Özet Güvenlik Raporu Oluştur
+        run: |
+          echo "# Güvenlik Tarama Sonuçları" > security-report.md
+          echo "## Gizli Bilgi Taraması" >> security-report.md
+          echo "GitLeaks taraması tamamlandı" >> security-report.md
+          echo "## Bağımlılık Taraması" >> security-report.md
+          echo "NPM Audit ve SBOM oluşturma tamamlandı" >> security-report.md
+          echo "## Statik Kod Analizi" >> security-report.md
+          echo "Semgrep ve ESLint taramaları tamamlandı" >> security-report.md
+          echo "## Docker İmaj Taraması" >> security-report.md
+          echo "Trivy taraması tamamlandı" >> security-report.md
+          echo "## DAST Taraması" >> security-report.md
+          echo "ZAP taraması tamamlandı" >> security-report.md
+
+      - name: Güvenlik Raporunu Arşivle
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-report.md 
